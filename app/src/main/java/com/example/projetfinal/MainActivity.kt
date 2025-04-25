@@ -1,6 +1,7 @@
 package com.example.projetfinal
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Bundle
@@ -15,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -33,16 +37,22 @@ import data.api.RetrofitInstance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import java.util.Locale
 import data.CityList
 
 class MainActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setContent {
             ProjetFinalTheme {
                 val context = LocalContext.current
+                val focusManager = LocalFocusManager.current
+                val keyboardController = LocalSoftwareKeyboardController.current
+                val coroutineScope = rememberCoroutineScope()
+
                 var location by remember { mutableStateOf<Location?>(null) }
                 val fusedLocationClient = remember {
                     LocationServices.getFusedLocationProviderClient(context)
@@ -53,15 +63,12 @@ class MainActivity : ComponentActivity() {
                     if (isGranted) {
                         fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                             location = loc
-                            Log.d(
-                                "DEBUG_GPS",
-                                "Position récupérée: ${loc?.latitude}, ${loc?.longitude}"
-                            )
                         }
                     } else {
                         Toast.makeText(context, "Permission refusée", Toast.LENGTH_SHORT).show()
                     }
                 }
+
                 LaunchedEffect(Unit) {
                     if (ActivityCompat.checkSelfPermission(
                             context,
@@ -70,16 +77,11 @@ class MainActivity : ComponentActivity() {
                     ) {
                         fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                             location = loc
-                            Log.d(
-                                "DEBUG_GPS",
-                                "Position récupérée (permission déjà OK): ${loc?.latitude}, ${loc?.longitude}"
-                            )
                         }
                     } else {
                         permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                     }
                 }
-
 
                 val apiKey = "8ae75617928daadf28762df0af085cae"
                 var weatherDescription by remember { mutableStateOf<String?>(null) }
@@ -88,6 +90,12 @@ class MainActivity : ComponentActivity() {
                 var iconCode by remember { mutableStateOf<String?>(null) }
                 var cityInput by remember { mutableStateOf("") }
                 var citySuggestions by remember { mutableStateOf(listOf<String>()) }
+
+                val drawerState = rememberDrawerState(DrawerValue.Closed)
+                val lastSearchedCity = remember {
+                    context.getSharedPreferences("weather_prefs", Context.MODE_PRIVATE)
+                        .getString("last_city", null)
+                }
 
                 LaunchedEffect(location) {
                     if (location != null && cityInput.isBlank()) {
@@ -102,7 +110,6 @@ class MainActivity : ComponentActivity() {
                             weatherDescription = weather.weather[0].description
                             iconCode = weather.weather[0].icon
                         } catch (e: Exception) {
-                            Log.e("API", "Erreur API météo GPS : $e")
                             Toast.makeText(
                                 context,
                                 "Erreur météo depuis la localisation",
@@ -112,117 +119,158 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                ) { padding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color(0xFF87CEFA),
-                                        Color(0xFFE0F7FA)
-                                    )
-                                )
+                ModalNavigationDrawer(
+                    drawerContent = {
+                        ModalDrawerSheet {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Dernière ville consultée :",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(horizontal = 16.dp)
                             )
-                            .padding(padding)
-                            .padding(24.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Top
-                        ) {
-                            Spacer(modifier = Modifier.height(32.dp))
-
-                            OutlinedTextField(
-                                value = cityInput,
-                                onValueChange = { input ->
-                                    cityInput = input
-                                    citySuggestions = if (input.isNotBlank()) {
-                                        CityList.cities.filter {
-                                            it.lowercase(Locale.ROOT)
-                                                .contains(input.lowercase(Locale.ROOT))
+                            Text(
+                                text = lastSearchedCity ?: "Aucune",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                        }
+                    },
+                    drawerState = drawerState
+                ) {
+                    Scaffold(
+                        topBar = {
+                            TopAppBar(
+                                title = { Text("Ma Météo") },
+                                navigationIcon = {
+                                    IconButton(onClick = {
+                                        coroutineScope.launch {
+                                            drawerState.open()
                                         }
-                                    } else {
-                                        emptyList()
+                                    }) {
+                                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
                                     }
                                 },
-                                label = { Text("Rechercher une ville") },
-                                trailingIcon = {
-                                    IconButton(onClick = {
-                                        if (cityInput.isNotBlank()) {
-                                            CoroutineScope(Dispatchers.IO).launch {
-                                                try {
-                                                    val weather =
-                                                        RetrofitInstance.api.getCurrentWeatherByCity(
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = Color.Transparent
+                                )
+                            )
+                        }
+                    ) { padding ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    brush = Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color(0xFF87CEFA),
+                                            Color(0xFFE0F7FA)
+                                        )
+                                    )
+                                )
+                                .padding(padding)
+                                .padding(24.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Top
+                            ) {
+                                Spacer(modifier = Modifier.height(32.dp))
+
+                                OutlinedTextField(
+                                    value = cityInput,
+                                    onValueChange = { input ->
+                                        cityInput = input
+                                        citySuggestions = if (input.isNotBlank()) {
+                                            CityList.cities.filter {
+                                                it.lowercase(Locale.ROOT)
+                                                    .contains(input.lowercase(Locale.ROOT))
+                                            }
+                                        } else {
+                                            emptyList()
+                                        }
+                                    },
+                                    label = { Text("Rechercher une ville") },
+                                    trailingIcon = {
+                                        IconButton(onClick = {
+                                            if (cityInput.isNotBlank()) {
+                                                CoroutineScope(Dispatchers.IO).launch {
+                                                    try {
+                                                        val weather = RetrofitInstance.api.getCurrentWeatherByCity(
                                                             cityName = cityInput,
                                                             apiKey = apiKey
                                                         )
-                                                    temperature = weather.main.temp
-                                                    cityName = weather.name
-                                                    weatherDescription =
-                                                        weather.weather[0].description
-                                                    iconCode = weather.weather[0].icon
-                                                    citySuggestions = emptyList()
-                                                } catch (e: Exception) {
-                                                    Log.e("API", "Erreur API pour la ville : $e")
+                                                        temperature = weather.main.temp
+                                                        cityName = weather.name
+                                                        weatherDescription = weather.weather[0].description
+                                                        iconCode = weather.weather[0].icon
+                                                        citySuggestions = emptyList()
+                                                        saveLastSearchedCity(context, weather.name)
+
+                                                        // Fermer le clavier et le focus après recherche
+                                                        focusManager.clearFocus()
+                                                        keyboardController?.hide()
+
+                                                    } catch (e: Exception) {
+                                                        Log.e("API", "Erreur API : $e")
+                                                    }
                                                 }
                                             }
+                                        }) {
+                                            Icon(Icons.Default.Search, contentDescription = "Rechercher")
                                         }
-                                    }) {
-                                        Icon(
-                                            imageVector = Icons.Default.Search,
-                                            contentDescription = "Rechercher"
-                                        )
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
 
-                            if (citySuggestions.isNotEmpty()) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp)
-                                ) {
-                                    citySuggestions.forEach { suggestion ->
-                                        Text(
-                                            text = suggestion,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    cityInput = suggestion
-                                                    citySuggestions = emptyList()
-                                                }
-                                                .padding(8.dp),
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
+                                if (citySuggestions.isNotEmpty()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp)
+                                    ) {
+                                        citySuggestions.forEach { suggestion ->
+                                            Text(
+                                                text = suggestion,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        cityInput = suggestion
+                                                        citySuggestions = emptyList()
+                                                    }
+                                                    .padding(8.dp),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
                                     }
                                 }
+
+                                Spacer(modifier = Modifier.height(32.dp))
+
+                                Greeting(
+                                    name = location?.let {
+                                        "Lat: ${it.latitude}, Lon: ${it.longitude}"
+                                    } ?: "Position inconnue",
+                                    city = cityName,
+                                    temp = temperature?.toDouble(),
+                                    description = weatherDescription,
+                                    iconCode = iconCode
+                                )
                             }
-
-                            Spacer(modifier = Modifier.height(32.dp))
-
-                            Greeting(
-                                name = location?.let {
-                                    "Lat: ${it.latitude}, Lon: ${it.longitude}"
-                                } ?: "Position inconnue",
-                                city = cityName,
-                                temp = temperature?.toDouble(),
-                                description = weatherDescription,
-                                iconCode = iconCode,
-                            )
                         }
                     }
                 }
             }
         }
     }
-}
 
+    private fun saveLastSearchedCity(context: Context, cityName: String) {
+        val sharedPref = context.getSharedPreferences("weather_prefs", Context.MODE_PRIVATE)
+        sharedPref.edit().putString("last_city", cityName).apply()
+    }
+}
 
 @Composable
 fun Greeting(
@@ -236,8 +284,7 @@ fun Greeting(
     val tempFormatted = temp?.let { String.format("%.1f", it) }
 
     Column(
-        modifier = modifier
-            .fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
